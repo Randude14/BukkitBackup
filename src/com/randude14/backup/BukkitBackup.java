@@ -1,7 +1,6 @@
 package com.randude14.backup;
 
 import java.io.File;
-import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -33,13 +32,16 @@ public class BukkitBackup extends JavaPlugin {
 		/*
 		 * set the command executor
 		 */
-		backup = new BackupCommandExecutor();
+		backup = new BackupCommandExecutor(this);
 		this.getCommand("backup").setExecutor(backup);
+		
+		Bukkit.getScheduler().runTaskTimer(this, backup, 0, 50 * 20);
+		
 		
 		/*
 		 * log that the plugin is enabled
 		 */
-		BukkitBackup.log(Level.INFO, "enabled!");
+		BukkitBackup.log("enabled!");
 	}
 	
 	/*
@@ -51,7 +53,7 @@ public class BukkitBackup extends JavaPlugin {
 		/*
 		 * log that the plugin is disabled
 		 */
-		BukkitBackup.log(Level.INFO, "disabled!");
+		BukkitBackup.log("disabled!");
 		
 		/*
 		 * finally set the instance to null 
@@ -71,8 +73,8 @@ public class BukkitBackup extends JavaPlugin {
 	 * @param Level level - the level of the message
 	 * @param String message - the message to log
 	 */
-	public static void log(Level level, String message) {
-		Bukkit.getLogger().log(level, "[BukkitBackup v" + instance.getDescription().getVersion() + "] - " + message);
+	public static void log(String message) {
+		Bukkit.getConsoleSender().sendMessage("[BukkitBackup v" + instance.getDescription().getVersion() + "] - " + message);
 	}
 	
 }

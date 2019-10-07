@@ -2,7 +2,7 @@ name: BukkitBackup
 main: com.randude14.backup.BukkitBackup
 author: Randude14
 description: 'Bukkit plugin for backing up your worlds'
-version: 1.0
+version: 1.1
 commands: 
     backup: 
         description: 'The overall plugin for BukkitBackup'

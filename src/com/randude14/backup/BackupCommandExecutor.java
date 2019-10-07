@@ -10,10 +10,11 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Level;
-import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -21,14 +22,26 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.World;
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
-import org.bukkit.command.TabExecutor;
+import org.bukkit.configuration.ConfigurationSection;
 
-public class BackupCommandExecutor implements TabExecutor {
+public class BackupCommandExecutor implements CommandExecutor, Runnable {
+	private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
+	private final Comparator<File> comp = (File f1, File f2) -> {
+		long diff = f1.lastModified() - f2.lastModified();
+		return (diff > 0) ? 1 : -1;
+	};
+	private final BukkitBackup plugin;
 	private File backupFolder;
+	private String backupFileName;
+	private List<Integer> backupTimes = new ArrayList<Integer>();
+	private int backupMax;
+	private boolean backing = false;
 	
-	public BackupCommandExecutor() {
+	public BackupCommandExecutor(BukkitBackup plugin) {
+		this.plugin = plugin;
 		reload();
 	}
 	
@@ -37,7 +50,11 @@ public class BackupCommandExecutor implements TabExecutor {
 	 */
 	public void reload() {
 		BukkitBackup.getInstance().reloadConfig();
-		String stringPath = BukkitBackup.getInstance().getConfig().getString("backup-folder");
+		ConfigurationSection config = BukkitBackup.getInstance().getConfig();
+		String stringPath = config.getString("backup-folder");
+		backupFileName = config.getString("backup-file-name");
+		backupMax = config.getInt("backup-max");
+		backupTimes.clear();
 		
 		/*
 		 * attempts to set the backup folder and if it exists, will set the backup folder
@@ -46,20 +63,58 @@ public class BackupCommandExecutor implements TabExecutor {
 			Path path = Paths.get(stringPath);
 			if(Files.exists(path)) {
 				backupFolder = path.toFile().getAbsoluteFile();
-				BukkitBackup.log(Level.INFO, backupFolder + " found. Using it as backup folder.");
-				return;
+				BukkitBackup.log(backupFolder + " found. Using it as backup folder.");
+			} else {
+				backupFolder = new File("backups");
+				backupFolder.mkdirs();
+				BukkitBackup.log("Backup folder not found. Creating a default backup folder instead.");
 			}
 		} 
+		
+		if(backupMax < 0) {
+			BukkitBackup.log("Backup max must be greater than 0. Defaulting to 1.");
+			backupMax = 1;
+		}
+		
+		if(backupFileName.isEmpty()) {
+			BukkitBackup.log("Backup file name cannot be empty. Defaulting to 'FullBackup'.");
+			backupFileName = "FullBackup";
+		}
+		
+		for(String timeString : config.getString("backup-times").split("\\s+")) {
+			try {
+				int time = Integer.parseInt(timeString);
+				backupTimes.add(time);
+				System.out.println("Time added - " + time);
+			} catch (Exception ex) {
+				BukkitBackup.log(timeString + " is not an integer!");
+			}
+		}
+		
 		
 		/*
 		 * if still here the backup folder has not been set or doesn't exist and needs to be set to the default 'backups' folder
 		 */
-		backupFolder = new File("backups");
-		backupFolder.mkdirs();
-		BukkitBackup.log(Level.INFO, "Backup folder not found. Creating a default backup folder instead.");
-		System.out.println(stringPath);
 	}
 	
+	// called every minute or so
+	public void run() {
+		Calendar current = Calendar.getInstance();
+		int time = current.get(Calendar.HOUR_OF_DAY);
+		int min = current.get(Calendar.MINUTE);
+		
+		// we only care if we are at an hour
+		if(min != 0) {
+			return;
+		}
+		
+		for(int check : backupTimes) {
+			if(check == time) {
+				onServerBackup();
+			}
+		}
+	}
+		
 	/*
 	 * (non-Javadoc)
 	 * @see org.bukkit.command.CommandExecutor#onCommand(org.bukkit.command.CommandSender, org.bukkit.command.Command, java.lang.String, java.lang.String[])
@@ -71,7 +126,7 @@ public class BackupCommandExecutor implements TabExecutor {
 		 * if the sender is not console and not opped they do not have access to this command
 		 */
 		if(!(sender instanceof ConsoleCommandSender) && !sender.isOp()) {
-			sender.sendMessage(ChatColor.RED + "You cannot this command!");
+			sender.sendMessage(ChatColor.RED + "You cannot use this command!");
 			return true;
 		}
 		
@@ -79,10 +134,10 @@ public class BackupCommandExecutor implements TabExecutor {
 		 *  if they have not provided arguments, send help commands
 		 */
 		if(args.length == 0 || args[0].equalsIgnoreCase("help")) {
-			sender.sendMessage(ChatColor.AQUA + "/backup help - list commands");
+			sender.sendMessage(ChatColor.AQUA + "/backup help   - list commands");
 			sender.sendMessage(ChatColor.AQUA + "/backup reload - reload config");
-			sender.sendMessage(ChatColor.AQUA + "/backup list - list current loaded worlds");
-			sender.sendMessage(ChatColor.AQUA + "/backup <world name> <name of file (optional)> - can have spaces in name");
+			sender.sendMessage(ChatColor.AQUA + "/backup list   - list all loaded worlds");
+			sender.sendMessage(ChatColor.AQUA + "/backup all    - backup all worlds");
 			return false;
 		}
 		
@@ -105,139 +160,78 @@ public class BackupCommandExecutor implements TabExecutor {
 			return true;
 		}
 		
-		/*
-		 * set the world name, separate arguments are assumed to be spaces
-		 */
-		String w = "";
-		for(int i = 0;i < args.length;i++) {
-			w += args[i];
-			if(i < args.length-1){
-				w += " ";
-			}
-		}
-		
-		/*
-		 * find the world and if it doesn't exist, send an error message to the user it was not found
-		 */
-		World world = Bukkit.getServer().getWorld(w);	
-		if(world == null) {
-			sender.sendMessage(ChatColor.RED + "The world, " + ChatColor.AQUA + w + ChatColor.RED + ", does not exist!");
-			return false;
-		}
-		
-		/*
-		 * save the world before backuping
-		 */
-		sender.sendMessage(ChatColor.AQUA + "Saving world before backing up...may cause lag...");
-		world.save();
-		
-		
-		/*
-		 * since we're not accessing any Bukkit API methods, we can run asynchronously so we don't back up the server
-		 */
-		final String worldName = w;
-		Runnable runnable = () -> {
-			String sourceDir = world.getWorldFolder().getAbsoluteFile().getPath();
-			sender.sendMessage(ChatColor.AQUA + "Now backing up world...");
-			if(onBackup(worldName, sourceDir, backupFolder)) {
-				sender.sendMessage(ChatColor.AQUA + "The world " + world.getName() + " has been backed up.");
-			} else {
-				sender.sendMessage(ChatColor.RED + "An error has occurred. Be sure to check the command line.");
-			}
-		};
-		new Thread(runnable).start();
-		
-		return true; // finally return true that it was a valid command
-	}
-	
-	public List<String> onTabComplete(CommandSender sender, Command cmd, String label, String[] args) {
-		
-		/*
-		 * if no args then we cannot suggest any world names
-		 */
-		if(args.length == 0) {
-			return null;
-		}
-		
-		/*
-		 * if it's a known command return null
-		 */
-		if(args[0].equalsIgnoreCase("reload") 
-				|| args[0].equalsIgnoreCase("list")
-				|| args[0].equalsIgnoreCase("help")) {
-			return null;
-		}
-		
-		/*
-		 * turn the arguments into a world name
-		 */
-		String w = "";
-		for(int i = 0;i < args.length;i++) {
-			w += args[i];
-			if(i < args.length-1){
-				w += " ";
-			}
-		}
-		
-		final String worldName = w;
-		List<World> worlds = Bukkit.getWorlds().stream() // get stream of worlds loaded currently
-				.filter(world -> world.getName().toLowerCase().startsWith(worldName.toLowerCase())) //filter out the worlds that do not match our world name
-				.collect(Collectors.toList()); // collect as a list
-		
-		/*
-		 * if no worlds are found return null
-		 */
-		if(worlds.isEmpty()) {
-			return null;
-		}
-		
-		/*
-		 * traverse through our list of matched worlds and add the index of their name according to the argument the sender has provided
-		 */
-		int index = args.length-1; // the index in the argument
-		
-		List<String> list = new ArrayList<String>(); //the list to return;
-		
-		worlds.forEach(world -> {
+		if(args[0].equalsIgnoreCase("all")) {
 			
-			String[] words = world.getName().split("\\s+"); // get array of words like arguments
-			
-			if(index <= words.length-1) {
-				list.add(words[index]); // add the index of world name according to args
+			if(backing) {
+				sender.sendMessage(ChatColor.RED + "Server is already in the middle of backing up.");
+				return true;
 			}
-		}); 
+			
+			sender.sendMessage(ChatColor.AQUA + "Backing up worlds. For more information. Check the console.");
+			onServerBackup();
+			return true;
+		}
 		
-		return list;
+		return false;
 	}
-	
+
 	/*
-	 * attempts to backup the world to a folder
+	 * attempts to backup all worlds to a zip file
 	 * @return whether or not the save was successful
 	 */
-	private static boolean onBackup(String worldName, String sourceDir, File folderToSaveIn) {
+	private void onServerBackup() {
+		backing = true;
+		BukkitBackup.log(ChatColor.AQUA + "Saving worlds before backing up...");
+		for(World world : Bukkit.getWorlds()) {
+			world.save();
+		}
 		
+		Runnable backupRunnable = () -> {
+			BukkitBackup.log(ChatColor.AQUA + "Now attempting to backup worlds....");
+			backupWorlds();
+		};
+		
+		Bukkit.getServer().getScheduler().runTask(plugin, backupRunnable);
+	}
+	
+	private void backupWorlds() {
 		/*
 		 * set the time stamp of the zip file
 		 */
 		LocalDateTime dateTime = LocalDateTime.now();
-		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
 		
-		File sourceFile = new File(sourceDir); // source file
-		File toFile = new File(folderToSaveIn, worldName + "-" + formatter.format(dateTime) + ".zip").getAbsoluteFile(); // the zip file we are backing up to
+		File outputFolder = new File(backupFolder, backupFileName + "-" + formatter.format(dateTime) + ".zip");
 		
-		try(FileOutputStream out = new FileOutputStream(toFile);
+		try(FileOutputStream out = new FileOutputStream(outputFolder);
 				ZipOutputStream zipStream = new ZipOutputStream(out)) {
 			
-			/*
-			 * add the directory so it recursively traverses through all its subfolders and subfiles
-			 */
-			addDirectory(zipStream, sourceDir.length() - sourceFile.getName().length(), sourceFile);
-			
+			for(World world : Bukkit.getWorlds()) {
+				File sourceFile = world.getWorldFolder().getAbsoluteFile();
+				int offset = sourceFile.getAbsolutePath().length() - sourceFile.getName().length();
+				
+				/*
+				 * add the directory so it recursively traverses through all its subfolders and subfiles
+				 */
+				addDirectory(zipStream, offset, sourceFile);
+			}
+			BukkitBackup.log(ChatColor.AQUA + "Worlds are now backed up.");
 		} catch (IOException ex) {
+			BukkitBackup.log(ChatColor.RED + "Failed to backup worlds.");
 			ex.printStackTrace();
-			return false;
+			backing = false;
+			return;
 		}
-		return true;
+		
+		// delete old saves
+		File[] files = backupFolder.listFiles((File file, String name) -> name.startsWith(backupFileName));
+		Arrays.sort(files, comp);
+		
+		if(files.length > backupMax) {
+			for(int i = 0; i < files.length - backupMax; i++) {
+				files[i].delete();
+			}
+		}
+		backing = false;
 	}
 	
 	/*
@@ -245,7 +239,7 @@ public class BackupCommandExecutor implements TabExecutor {
 	 * @param int offset - the offset from the original source
 	 * @return the relative path
 	 */
-	private static String getRelativePath(File file, int offset) {
+	private String getRelativePath(File file, int offset) {
 		String path = file.getPath().substring(offset);
 	    if (path.startsWith(File.pathSeparator)) {
 	        path = path.substring(1);
@@ -258,7 +252,7 @@ public class BackupCommandExecutor implements TabExecutor {
 	 * @param int offset - the offset from the path of the source
 	 * @param File fileSource - directory to copy the contents from
 	 */
-	private static void addDirectory(ZipOutputStream zout, int offset, File fileSource) throws IOException {
+	private void addDirectory(ZipOutputStream zout, int offset, File fileSource) throws IOException {
 		
 		/*
 		 * only add it if it's a directory

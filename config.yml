@@ -1,2 +1,11 @@
 #creates a backups folder in Server folder if left or if destination does not exist
 backup-folder: 
+
+# the prefix inserted before the timestamp on the backup zip files
+backup-file-name: FullBackup
+
+# backup times to save, 3 is 3am, NOTE: measured in military time
+backup-times: 3
+
+# the maximum number of backups allowed, NOTE: only checks files with the backup-file-name
+backup-max: 5
