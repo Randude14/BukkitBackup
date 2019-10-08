@@ -11,6 +11,7 @@ import java.nio.file.attribute.FileTime;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -30,7 +31,8 @@ import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 
 public class BackupCommandExecutor implements CommandExecutor, Runnable {
-	private final DateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH-mm-ss");
+	private final DateTimeFormatter fileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
+	private final DateFormat normalFormatter = new SimpleDateFormat("yyyy-MM-dd @ HH:mm:ss");
 	private final Comparator<File> comp = (File f1, File f2) -> {
 		long diff = f1.lastModified() - f2.lastModified();
 		return (diff > 0) ? 1 : -1;
@@ -185,7 +187,7 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 			FileTime fileTime = null;
 			try {
 				fileTime = Files.getLastModifiedTime(path);
-				sender.sendMessage(ChatColor.AQUA + "The last backup occured at " + formatter.format(fileTime.toMillis()));
+				sender.sendMessage(ChatColor.AQUA + "The last backup occured at " + normalFormatter.format(fileTime.toMillis()));
 			} catch (Exception ex) {
 				fileTime = null;
 			}
@@ -219,7 +221,7 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 		 */
 		LocalDateTime dateTime = LocalDateTime.now();
 		
-		File outputFolder = new File(backupFolder, backupFileName + "-" + formatter.format(dateTime) + ".zip");
+		File outputFolder = new File(backupFolder, backupFileName + "-" + fileFormatter.format(dateTime) + ".zip");
 		
 		try(FileOutputStream out = new FileOutputStream(outputFolder);
 				ZipOutputStream zipStream = new ZipOutputStream(out)) {
