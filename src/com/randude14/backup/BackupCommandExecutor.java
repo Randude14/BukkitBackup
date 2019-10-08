@@ -7,8 +7,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileTime;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -28,7 +30,7 @@ import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 
 public class BackupCommandExecutor implements CommandExecutor, Runnable {
-	private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
+	private final DateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH-mm-ss");
 	private final Comparator<File> comp = (File f1, File f2) -> {
 		long diff = f1.lastModified() - f2.lastModified();
 		return (diff > 0) ? 1 : -1;
@@ -137,6 +139,7 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 			sender.sendMessage(ChatColor.AQUA + "/backup help   - list commands");
 			sender.sendMessage(ChatColor.AQUA + "/backup reload - reload config");
 			sender.sendMessage(ChatColor.AQUA + "/backup list   - list all loaded worlds");
+			sender.sendMessage(ChatColor.AQUA + "/backup last   - list last backup date");
 			sender.sendMessage(ChatColor.AQUA + "/backup all    - backup all worlds");
 			return false;
 		}
@@ -170,6 +173,22 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 			sender.sendMessage(ChatColor.AQUA + "Backing up worlds. For more information. Check the console.");
 			onServerBackup();
 			return true;
+		}
+		
+		if(args[0].equalsIgnoreCase("last")) {
+			
+			File[] files = backupFolder.listFiles((File file, String name) -> name.startsWith(backupFileName));
+			Arrays.sort(files, comp);
+			
+			File lastBackupFile = files[files.length-1];
+			Path path = Paths.get(lastBackupFile.getAbsolutePath());
+			FileTime fileTime = null;
+			try {
+				fileTime = Files.getLastModifiedTime(path);
+				sender.sendMessage(ChatColor.AQUA + "The last backup occured at " + formatter.format(fileTime.toMillis()));
+			} catch (Exception ex) {
+				fileTime = null;
+			}
 		}
 		
 		return false;
