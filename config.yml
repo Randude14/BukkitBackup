@@ -4,8 +4,14 @@ backup-folder:
 # the prefix inserted before the timestamp on the backup zip files
 backup-file-name: FullBackup
 
+# the prefix inserted before the timestamp on the montly backup zip file
+monthly-backup-file-name: MontlyBackup
+
 # backup times to save, 3 is 3am, NOTE: measured in military time
 backup-times: 3
+
+# time to shutdown,   HOUR MINUTES
+shutdown-time: 4 55
 
 # the maximum number of backups allowed, NOTE: only checks files with the backup-file-name
 backup-max: 5

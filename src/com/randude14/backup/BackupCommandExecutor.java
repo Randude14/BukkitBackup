@@ -37,15 +37,24 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 		long diff = f1.lastModified() - f2.lastModified();
 		return (diff > 0) ? 1 : -1;
 	};
+	private final PlayerJoinListener listener;
 	private final BukkitBackup plugin;
 	private File backupFolder;
 	private String backupFileName;
-	private List<Integer> backupTimes = new ArrayList<Integer>();
+	private String monthlyBackupFileName;
+	private List<Integer> backupTimes = new ArrayList<Integer>(); // backup times
+	private int sd_hour, sd_minute;                               // shutdown times
 	private int backupMax;
 	private boolean backing = false;
+	private boolean monthlyBackup = false; // keeps track if monthly 
+	private int dayOfMonth, min, hour;
+	
 	
 	public BackupCommandExecutor(BukkitBackup plugin) {
 		this.plugin = plugin;
+		listener = new PlayerJoinListener();
+		
+		plugin.getServer().getPluginManager().registerEvents(listener, plugin);
 		reload();
 	}
 	
@@ -56,7 +65,9 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 		BukkitBackup.getInstance().reloadConfig();
 		ConfigurationSection config = BukkitBackup.getInstance().getConfig();
 		String stringPath = config.getString("backup-folder");
+		String shutdownString = config.getString("shutdown-time");
 		backupFileName = config.getString("backup-file-name");
+		monthlyBackupFileName = config.getString("monthly-backup-file-name");
 		backupMax = config.getInt("backup-max");
 		backupTimes.clear();
 		
@@ -75,6 +86,34 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 			}
 		} 
 		
+		int spaceIndex = shutdownString.indexOf(' ');
+		// shutdown set incorrectly
+		if(spaceIndex == -1) {
+			sd_hour = -1;      // set to -1, nothing to do. Shutdown will never happen
+			sd_minute = -1;
+			BukkitBackup.log("Shutdown time either not set or set incorrectly. Hour and minute should be separated by a space.");
+			
+		} else {
+			String hour_string = shutdownString.substring(0, spaceIndex);
+			String min_string = shutdownString.substring(spaceIndex+1);
+			
+			try {
+				sd_hour = Integer.parseInt(hour_string);
+				sd_minute = Integer.parseInt(min_string);
+				
+				if(sd_hour >= 12) {
+					BukkitBackup.log("Shutdown time loaded. Server will shutdown now at " + (sd_hour == 12 ? 12 : sd_hour-12) + ":" + sd_minute + " PM");
+				} else {
+					BukkitBackup.log("Shutdown time loaded. Server will shutdown now at " + sd_hour + ":" + sd_minute + " AM");
+				}
+				
+			} catch (Exception ex) {
+				sd_hour = -1;      // set to -1, nothing to do. Shutdown will never happen
+				sd_minute = -1;
+				BukkitBackup.log("Failed to load shutdown time. Contains non-number characters.");
+			}
+		}
+		
 		if(backupMax < 0) {
 			BukkitBackup.log("Backup max must be greater than 0. Defaulting to 1.");
 			backupMax = 1;
@@ -85,11 +124,21 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 			backupFileName = "FullBackup";
 		}
 		
+		if(monthlyBackupFileName.isEmpty()) {
+			BukkitBackup.log("Monthly backup file name cannot be empty. Defaulting to 'MonthlyBackup'.");
+			monthlyBackupFileName = "MonthlyBackup";
+		}
+		
 		for(String timeString : config.getString("backup-times").split("\\s+")) {
 			try {
 				int time = Integer.parseInt(timeString);
 				backupTimes.add(time);
-				System.out.println("Time added - " + time);
+				
+				if(time >= 12) {
+					BukkitBackup.log("Server will now backup at " + (time == 12 ? 12 : time-12) + ":00 PM");
+				} else {
+					BukkitBackup.log("Server will now backup at " + time + ":00 AM");
+				}
 			} catch (Exception ex) {
 				BukkitBackup.log(timeString + " is not an integer!");
 			}
@@ -103,20 +152,41 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 	
 	// called every minute or so
 	public void run() {
-		Calendar current = Calendar.getInstance();
-		int time = current.get(Calendar.HOUR_OF_DAY);
-		int min = current.get(Calendar.MINUTE);
+		// update the current day, hour, and minute
+		update_date_fields();
 		
-		// we only care if we are at an hour
-		if(min != 0) {
-			return;
-		}
-		
+		// only backup at scheduled times
 		for(int check : backupTimes) {
-			if(check == time) {
+			if(check == hour) {
+				
+				// we only care if we are at an hour
+				if(min != 0) {
+					return;
+				}
+				
+				if(! listener.player_activity()) {
+					BukkitBackup.log("Backup scheduled but no player activity since last backup. No need to save.");
+					break;
+				}
+				
 				onServerBackup();
 			}
 		}
+		
+		// time to shutdown server
+		if(sd_hour == hour && sd_minute == min) {
+			BukkitBackup.log("Shutting down server according to the config...");
+			Bukkit.getServer().shutdown();
+		}
+		
+		
+	}
+	
+	public void update_date_fields() {
+		Calendar current = Calendar.getInstance();
+		dayOfMonth = current.get(Calendar.DAY_OF_MONTH);
+		hour = current.get(Calendar.HOUR_OF_DAY);
+		min = current.get(Calendar.MINUTE);
 	}
 		
 	/*
@@ -206,16 +276,38 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 		for(World world : Bukkit.getWorlds()) {
 			world.save();
 		}
-		
+				
 		Runnable backupRunnable = () -> {
 			BukkitBackup.log(ChatColor.AQUA + "Now attempting to backup worlds....");
-			backupWorlds();
+					
+			if(backupWorlds(backupFileName, backupMax)) {
+				BukkitBackup.log(ChatColor.AQUA + "Worlds are now backed up.");
+			} else {
+				BukkitBackup.log(ChatColor.RED + "Failed to backup worlds.");
+			}
+					
+			// check for monthly backup
+			if(dayOfMonth == 1 && !monthlyBackup) {
+				BukkitBackup.log(ChatColor.AQUA + "Today is the 1rst of the month...time to do montly backup....");
+						
+				if(backupWorlds(monthlyBackupFileName, 1)) {
+					BukkitBackup.log(ChatColor.AQUA + "Monthly backup done.");
+					monthlyBackup = true;
+				} else {
+					BukkitBackup.log(ChatColor.RED + "Failed monthly backup.");
+				}
+			} else if(dayOfMonth != 1) {
+				monthlyBackup = false;
+			}
+			backing = false;
 		};
-		
-		Bukkit.getServer().getScheduler().runTask(plugin, backupRunnable);
+				
+		Bukkit.getServer().getScheduler().runTaskAsynchronously(plugin, backupRunnable);
 	}
 	
-	private void backupWorlds() {
+	// backupFileName - file to backup
+	// max - max number of copies to keep
+	private boolean backupWorlds(String backupFileName, int max) {
 		/*
 		 * set the time stamp of the zip file
 		 */
@@ -235,24 +327,19 @@ public class BackupCommandExecutor implements CommandExecutor, Runnable {
 				 */
 				addDirectory(zipStream, offset, sourceFile);
 			}
-			BukkitBackup.log(ChatColor.AQUA + "Worlds are now backed up.");
 		} catch (IOException ex) {
-			BukkitBackup.log(ChatColor.RED + "Failed to backup worlds.");
 			ex.printStackTrace();
-			backing = false;
-			return;
+			return false;
 		}
 		
 		// delete old saves
 		File[] files = backupFolder.listFiles((File file, String name) -> name.startsWith(backupFileName));
 		Arrays.sort(files, comp);
 		
-		if(files.length > backupMax) {
-			for(int i = 0; i < files.length - backupMax; i++) {
-				files[i].delete();
-			}
+		for(int i = 0; i < files.length - max; i++) {
+			files[i].delete();
 		}
-		backing = false;
+		return true;
 	}
 	
 	/*
